@@ -3,6 +3,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -37,16 +39,13 @@ public class NodeExporter {
         try {
             Process p = Runtime.getRuntime().exec("uptime");
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            
-            string one = "";
-            string five = "";
-            string fifteen = "";
+            String line, one, five, fifteen;
+            one = five = fifteen = "";
             
             line = reader.readLine();
             if (line != null) {
-                Pattern p = Pattern.compile("load average: (\d.\d\d), (\d.\d\d), (\d.\d\d)");
-                Matcher m = p.matcher(line);
+                Pattern loadNums = Pattern.compile("load average: (\\d\\.\\d\\d), (\\d\\.\\d\\d), (\\d\\.\\d\\d)");
+                Matcher m = loadNums.matcher(line);
                 if (m.find()) {
                     one = m.group(1);
                     five = m.group(2);
@@ -57,7 +56,7 @@ public class NodeExporter {
             
             if ((one == "") || (five == "") || (fifteen == "")) {
                 // TODO raise a custom exception type here
-                sb.append("# Error parsing uptime metrics: ").append(line).append("\n")
+                sb.append("# Error parsing uptime metrics: ").append(line).append("\n");
             } else {
                 // Output metrics
                 sb.append("# HELP node_load1 1m load average.\n");
