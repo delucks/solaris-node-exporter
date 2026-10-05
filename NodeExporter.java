@@ -3,6 +3,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
@@ -28,11 +30,54 @@ public class NodeExporter {
             
             scrapeLoadAvg(response);
             scrapeSystemMisc(response);
+            scrapeArp(response);
             
             t.sendResponseHeaders(200, response.length());
             OutputStream os = t.getResponseBody();
             os.write(response.toString().getBytes());
             os.close();
+        }
+    }
+
+    private static void scrapeArp(StringBuilder sb) {
+        try {
+            Process p = new ProcessBuilder("arp", "-a", "-n").start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            HashMap<String, Integer> deviceCounts = new HashMap<String, Integer>();
+
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // Skip header lines
+                if ((line.contains("Device") && line.contains("IP Address")) || ((line.contains("------"))) || ((line.contains("Net to Media Table")))) {
+                    continue;
+                }
+                line = line.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+
+                String[] parts = line.split("\\s+", 2);
+                if (parts.length > 0) {
+                    String device = parts[0];
+                    Integer value = deviceCounts.containsKey(device) ? deviceCounts.get(device) : 0;
+                    deviceCounts.put(device, value + 1);
+                }
+            }
+            reader.close();
+
+            // Output node_arp_entries metrics
+            if (deviceCounts.isEmpty()) {
+                sb.append("# Error reading arp metrics: no devices returned\n");
+            } else {
+                sb.append("# HELP node_arp_entries Number of ARP entries for each device.\n");
+                sb.append("# TYPE node_arp_entries gauge\n");
+                for (Map.Entry<String, Integer> entry : deviceCounts.entrySet()) {
+                    sb.append(String.format("node_arp_entries{device=\"%s\"} %d\n", entry.getKey(), entry.getValue()));
+                }
+            }
+        } catch (IOException e) {
+            // TODO exception handling
+            sb.append("# Error reading arp metrics: ").append(e.getMessage()).append("\n");
         }
     }
 
