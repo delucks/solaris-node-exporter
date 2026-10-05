@@ -27,6 +27,7 @@ public class NodeExporter {
             StringBuilder response = new StringBuilder();
             
             scrapeLoadAvg(response);
+            scrapeSystemMisc(response);
             
             t.sendResponseHeaders(200, response.length());
             OutputStream os = t.getResponseBody();
@@ -35,9 +36,23 @@ public class NodeExporter {
         }
     }
 
+    private static void scrapeSystemMisc(StringBuilder sb) {
+        try {
+            Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "system_misc").start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+        } catch (IOException e) {
+            // TODO exception handling
+            sb.append("# Error reading system_misc metrics: ").append(e.getMessage()).append("\n");
+        }
+    }
+
     private static void scrapeLoadAvg(StringBuilder sb) {
         try {
-            Process p = Runtime.getRuntime().exec("uptime");
+            Process p = new ProcessBuilder("uptime").start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line, one, five, fifteen;
             one = five = fifteen = "";
@@ -55,7 +70,7 @@ public class NodeExporter {
             reader.close();
             
             if ((one == "") || (five == "") || (fifteen == "")) {
-                // TODO raise a custom exception type here
+                // TODO exception handling
                 sb.append("# Error parsing uptime metrics: ").append(line).append("\n");
             } else {
                 // Output metrics
@@ -70,7 +85,7 @@ public class NodeExporter {
                 sb.append("node_load5 ").append(five).append("\n");
             }
         } catch (IOException e) {
-            // TODO replace this with a more meaningful exception
+            // TODO exception handling
             sb.append("# Error reading uptime metrics: ").append(e.getMessage()).append("\n");
         }
     }
