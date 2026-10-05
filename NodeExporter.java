@@ -37,12 +37,44 @@ public class NodeExporter {
     }
 
     private static void scrapeSystemMisc(StringBuilder sb) {
+        // Improvements:
+        // Load averages could be calculated from avenrun_1min (etc) / FSCALE
+        // but FSCALE is only defined in sys/param.h and I don't want to reach for JNI yet
+        // node_procs_running isn't entirely accurate; it's the total number of processes
+        // We can't tell at this stage how many of these are node_procs_blocked
         try {
             Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "system_misc").start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
+            String line, bootTime, nproc;
+            bootTime = nproc = "";
+            
             while ((line = reader.readLine()) != null) {
-                sb.append(line);
+                String[] parts = line.trim().split("\\s+", 2);
+                if (parts.length >= 2) {
+                    String metricName = parts[0];
+                    String metricValue = parts[1];
+                    
+                    if (metricName.equals("boot_time")) {
+                        bootTime = metricValue;
+                    } else if (metricName.equals("nproc")) {
+                        nproc = metricValue;
+                    }
+                }
+            }
+            reader.close();
+            
+            // Output node_boot_time_seconds metric
+            if (bootTime != "") {
+                sb.append("# HELP node_boot_time_seconds Node boot time, in seconds since Unix epoch.\n");
+                sb.append("# TYPE node_boot_time_seconds gauge\n");
+                sb.append("node_boot_time_seconds ").append(bootTime).append("\n");
+            }
+            
+            // Output node_procs_running metric
+            if (nproc != "") {
+                sb.append("# HELP node_procs_running Number of processes in runnable state.\n");
+                sb.append("# TYPE node_procs_running gauge\n");
+                sb.append("node_procs_running ").append(nproc).append("\n");
             }
         } catch (IOException e) {
             // TODO exception handling
