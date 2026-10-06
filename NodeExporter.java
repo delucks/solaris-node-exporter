@@ -43,12 +43,42 @@ public class NodeExporter {
         public void handle(HttpExchange t) throws IOException {
             System.out.println("Handling request");
             StringBuilder response = new StringBuilder();
+
+            // establish collector metrics
+            long start;
+            boolean succeeded;
+            StringBuilder timing = new StringBuilder();
+            StringBuilder success = new StringBuilder();
             
-            scrapeLoadAvg(response);
-            scrapeSystemMisc(response);
-            scrapeArp(response);
-            scrapeVmstatTotals(response);
+            // call all collectors
+            // loadavg
+            start = System.nanoTime();
+            succeeded = scrapeLoadAvg(response);
+            collectStats("loadavg", timing, success, start, System.nanoTime(), succeeded);
             
+            // boottime & procs_running
+            start = System.nanoTime();
+            succeeded = scrapeSystemMisc(response);
+            collectStats("os", timing, success, start, System.nanoTime(), succeeded);
+
+            // arp counters
+            start = System.nanoTime();
+            succeeded = scrapeArp(response);
+            collectStats("arp", timing, success, start, System.nanoTime(), succeeded);
+
+            // interrupts, context switches, forks
+            start = System.nanoTime();
+            succeeded = scrapeVmstatTotals(response);
+            collectStats("vmstat", timing, success, start, System.nanoTime(), succeeded);
+
+            // emit collector duration & success metrics
+            response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
+            response.append("# TYPE node_scrape_collector_duration_seconds gauge\n");
+            response.append(timing.toString());
+            response.append("# HELP node_scrape_collector_success node_exporter: Whether a collector succeeded.\n");
+            response.append("# TYPE node_scrape_collector_success gauge\n");
+            response.append(success.toString());
+
             t.sendResponseHeaders(200, response.length());
             OutputStream os = t.getResponseBody();
             os.write(response.toString().getBytes());
@@ -56,7 +86,13 @@ public class NodeExporter {
         }
     }
 
-    private static void scrapeVmstatTotals(StringBuilder sb) {
+    private static void collectStats(String collectorName, StringBuilder timing, StringBuilder success, long start, long end, boolean succeeded) {
+        double durationSeconds = (end - start) / 1000000000.0;
+        timing.append("node_scrape_collector_duration_seconds{collector=\"").append(collectorName).append("\"} ").append(durationSeconds).append("\n");
+        success.append("node_scrape_collector_success{collector=\"").append(collectorName).append("\"} ").append(succeeded ? "1" : "0").append("\n");
+    }
+
+    private static boolean scrapeVmstatTotals(StringBuilder sb) {
         try {
             Process p = new ProcessBuilder("vmstat", "-s").start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -87,6 +123,7 @@ public class NodeExporter {
                             forks = forks + Integer.parseInt(parts[0]);
                         } catch (NumberFormatException e) {
                             sb.append("# Error converting forks metric: ").append(line).append("\n");
+                            return false;
                         }
                     }
                 }
@@ -105,13 +142,15 @@ public class NodeExporter {
             sb.append("# HELP node_forks_total Total number of forks.\n");
             sb.append("# TYPE node_forks_total counter\n");
             sb.append("node_forks_total ").append(forks).append("\n");
+            return true;
         } catch (IOException e) {
             // TODO exception handling
             sb.append("# Error reading static vmstat metrics: ").append(e.getMessage()).append("\n");
+            return false;
         }
     }
 
-    private static void scrapeArp(StringBuilder sb) {
+    private static boolean scrapeArp(StringBuilder sb) {
         try {
             Process p = new ProcessBuilder("arp", "-a", "-n").start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -140,20 +179,23 @@ public class NodeExporter {
             // Output node_arp_entries metrics
             if (deviceCounts.isEmpty()) {
                 sb.append("# Error reading arp metrics: no devices returned\n");
+                return false;
             } else {
                 sb.append("# HELP node_arp_entries Number of ARP entries for each device.\n");
                 sb.append("# TYPE node_arp_entries gauge\n");
                 for (Map.Entry<String, Integer> entry : deviceCounts.entrySet()) {
                     sb.append(String.format("node_arp_entries{device=\"%s\"} %d\n", entry.getKey(), entry.getValue()));
                 }
+                return true;
             }
         } catch (IOException e) {
             // TODO exception handling
             sb.append("# Error reading arp metrics: ").append(e.getMessage()).append("\n");
+            return false;
         }
     }
 
-    private static void scrapeSystemMisc(StringBuilder sb) {
+    private static boolean scrapeSystemMisc(StringBuilder sb) {
         // Improvements:
         // Load averages could be calculated from avenrun_1min (etc) / FSCALE
         // but FSCALE is only defined in sys/param.h and I don't want to reach for JNI yet
@@ -180,11 +222,15 @@ public class NodeExporter {
             }
             reader.close();
             
+            boolean success = true;
             // Output node_boot_time_seconds metric
             if (bootTime != "") {
                 sb.append("# HELP node_boot_time_seconds Node boot time, in seconds since Unix epoch.\n");
                 sb.append("# TYPE node_boot_time_seconds gauge\n");
                 sb.append("node_boot_time_seconds ").append(bootTime).append("\n");
+            } else {
+                sb.append("# Error retrieving node_boot_time_seconds metric");
+                success = false;
             }
             
             // Output node_procs_running metric
@@ -192,14 +238,19 @@ public class NodeExporter {
                 sb.append("# HELP node_procs_running Number of processes in runnable state.\n");
                 sb.append("# TYPE node_procs_running gauge\n");
                 sb.append("node_procs_running ").append(nproc).append("\n");
+            } else {
+                sb.append("# Error retrieving node_procs_running metric");
+                success = false;
             }
+            return success;
         } catch (IOException e) {
             // TODO exception handling
             sb.append("# Error reading system_misc metrics: ").append(e.getMessage()).append("\n");
+            return false;
         }
     }
 
-    private static void scrapeLoadAvg(StringBuilder sb) {
+    private static boolean scrapeLoadAvg(StringBuilder sb) {
         try {
             Process p = new ProcessBuilder("uptime").start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -221,6 +272,7 @@ public class NodeExporter {
             if ((one == "") || (five == "") || (fifteen == "")) {
                 // TODO exception handling
                 sb.append("# Error parsing uptime metrics: ").append(line).append("\n");
+                return false;
             } else {
                 // Output metrics
                 sb.append("# HELP node_load1 1m load average.\n");
@@ -233,9 +285,11 @@ public class NodeExporter {
                 sb.append("# TYPE node_load5 gauge\n");
                 sb.append("node_load5 ").append(five).append("\n");
             }
+            return true;
         } catch (IOException e) {
             // TODO exception handling
             sb.append("# Error reading uptime metrics: ").append(e.getMessage()).append("\n");
+            return false;
         }
     }
 }
