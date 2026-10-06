@@ -18,7 +18,10 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -29,6 +32,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 public class NodeExporter {
+    private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
 
     public static void main(String[] args) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress(9100), 0);
@@ -41,9 +45,7 @@ public class NodeExporter {
     static class MetricsExporter implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            System.out.println("Handling request");
             StringBuilder response = new StringBuilder();
-
             // establish collector metrics
             long start;
             boolean succeeded;
@@ -79,10 +81,23 @@ public class NodeExporter {
             response.append("# TYPE node_scrape_collector_success gauge\n");
             response.append(success.toString());
 
-            t.sendResponseHeaders(200, response.length());
+            int statusCode = 200;
+            t.sendResponseHeaders(statusCode, response.length());
             OutputStream os = t.getResponseBody();
             os.write(response.toString().getBytes());
             os.close();
+
+            // Emit web server log in Apache combined log format
+            String client, referer, userAgent;
+            InetAddress remoteAddr = t.getRemoteAddress().getAddress();
+            client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
+            referer = t.getRequestHeaders().getFirst("Referer");
+            referer = referer != null ? referer : "-";
+            userAgent = t.getRequestHeaders().getFirst("User-Agent");
+            userAgent = userAgent != null ? userAgent : "-";
+            String timestamp = apache.format(new Date());
+            String requestLine = t.getRequestMethod() + " " + t.getRequestURI() + " " + t.getProtocol();
+            System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, statusCode, response.length(), referer, userAgent);
         }
     }
 
