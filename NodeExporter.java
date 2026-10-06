@@ -47,11 +47,67 @@ public class NodeExporter {
             scrapeLoadAvg(response);
             scrapeSystemMisc(response);
             scrapeArp(response);
+            scrapeVmstatTotals(response);
             
             t.sendResponseHeaders(200, response.length());
             OutputStream os = t.getResponseBody();
             os.write(response.toString().getBytes());
             os.close();
+        }
+    }
+
+    private static void scrapeVmstatTotals(StringBuilder sb) {
+        try {
+            Process p = new ProcessBuilder("vmstat", "-s").start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line, deviceInterrupts, cpuContextSwitches;
+            deviceInterrupts = cpuContextSwitches = "";
+            int forks, vforks;
+            forks = vforks = 0;
+
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.endsWith("device interrupts")) {
+                    String[] parts = line.split("\\s+");
+                    if (parts.length >= 1) {
+                        deviceInterrupts = parts[0];
+                    }
+                }
+                else if (line.endsWith("cpu context switches")) {
+                    String[] parts = line.split("\\s+");
+                    if (parts.length >= 1) {
+                        cpuContextSwitches = parts[0];
+                    }
+                }
+                // catches both the forks and vforks lines
+                else if (line.endsWith("forks")) {
+                    String[] parts = line.split("\\s+");
+                    if (parts.length >= 1) {
+                        try {
+                            forks = forks + Integer.parseInt(parts[0]);
+                        } catch (NumberFormatException e) {
+                            sb.append("# Error converting forks metric: ").append(line).append("\n");
+                        }
+                    }
+                }
+            }
+            reader.close();
+
+            // Output the simple interrupt/context switch counters
+            sb.append("# HELP node_intr_total Total number of interrupts serviced.\n");
+            sb.append("# TYPE node_intr_total counter\n");
+            sb.append("node_intr_total ").append(deviceInterrupts).append("\n");
+            sb.append("# HELP node_context_switches_total Total number of context switches.\n");
+            sb.append("# TYPE node_context_switches_total counter\n");
+            sb.append("node_context_switches_total ").append(cpuContextSwitches).append("\n");
+
+            // Output node_forks_total metric (forks + vforks)
+            sb.append("# HELP node_forks_total Total number of forks.\n");
+            sb.append("# TYPE node_forks_total counter\n");
+            sb.append("node_forks_total ").append(forks).append("\n");
+        } catch (IOException e) {
+            // TODO exception handling
+            sb.append("# Error reading static vmstat metrics: ").append(e.getMessage()).append("\n");
         }
     }
 
