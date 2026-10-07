@@ -51,13 +51,13 @@ public class NodeExporter {
             boolean succeeded;
             StringBuilder timing = new StringBuilder();
             StringBuilder success = new StringBuilder();
-            
+
             // call all collectors
             // loadavg
             start = System.nanoTime();
             succeeded = scrapeLoadAvg(response);
             collectStats("loadavg", timing, success, start, System.nanoTime(), succeeded);
-            
+
             // boottime & procs_running
             start = System.nanoTime();
             succeeded = scrapeSystemMisc(response);
@@ -221,13 +221,13 @@ public class NodeExporter {
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line, bootTime, nproc;
             bootTime = nproc = "";
-            
+
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.trim().split("\\s+", 2);
                 if (parts.length >= 2) {
                     String metricName = parts[0];
                     String metricValue = parts[1];
-                    
+
                     if (metricName.equals("boot_time")) {
                         bootTime = metricValue;
                     } else if (metricName.equals("nproc")) {
@@ -236,7 +236,7 @@ public class NodeExporter {
                 }
             }
             reader.close();
-            
+
             boolean success = true;
             // Output node_boot_time_seconds metric
             if (bootTime != "") {
@@ -247,7 +247,7 @@ public class NodeExporter {
                 sb.append("# Error retrieving node_boot_time_seconds metric");
                 success = false;
             }
-            
+
             // Output node_procs_running metric
             if (nproc != "") {
                 sb.append("# HELP node_procs_running Number of processes in runnable state.\n");
@@ -271,7 +271,7 @@ public class NodeExporter {
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line, one, five, fifteen;
             one = five = fifteen = "";
-            
+
             line = reader.readLine();
             if (line != null) {
                 Pattern loadNums = Pattern.compile("load average: (\\d\\.\\d\\d), (\\d\\.\\d\\d), (\\d\\.\\d\\d)");
@@ -283,7 +283,7 @@ public class NodeExporter {
                 }
             }
             reader.close();
-            
+
             if ((one == "") || (five == "") || (fifteen == "")) {
                 // TODO exception handling
                 sb.append("# Error parsing uptime metrics: ").append(line).append("\n");
