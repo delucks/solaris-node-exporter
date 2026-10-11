@@ -49,7 +49,7 @@ public class NodeExporter {
 
     public static void handle(Socket socket) throws IOException {
         // Parse the HTTP request
-        String requestLine, line, method, path, httpVersion, referer, userAgent, client;
+        String requestLine, line, method, path, referer, userAgent, client;
         BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         // NOTE: auto-flushing is enabled-- we should check to make sure this isn't causing weird behavior once running under load
         PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
@@ -65,7 +65,6 @@ public class NodeExporter {
         }
         method = parts[0];
         path = parts[1];
-        httpVersion = parts[2];
 
         // This server only supports GET /metrics; give a 404 otherwise
         if (!method.equals("GET") || !path.equals("/metrics")) {
