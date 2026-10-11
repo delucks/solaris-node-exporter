@@ -123,15 +123,13 @@ public class NodeExporter {
                     if (parts.length >= 1) {
                         deviceInterrupts = parts[0];
                     }
-                }
-                else if (line.endsWith("cpu context switches")) {
+                } else if (line.endsWith("cpu context switches")) {
                     String[] parts = line.split("\\s+");
                     if (parts.length >= 1) {
                         cpuContextSwitches = parts[0];
                     }
-                }
                 // catches both the forks and vforks lines
-                else if (line.endsWith("forks")) {
+                } else if (line.endsWith("forks")) {
                     String[] parts = line.split("\\s+");
                     if (parts.length >= 1) {
                         try {
@@ -174,11 +172,11 @@ public class NodeExporter {
             String line;
             while ((line = reader.readLine()) != null) {
                 // Skip header lines
-                if ((line.contains("Device") && line.contains("IP Address")) || ((line.contains("------"))) || ((line.contains("Net to Media Table")))) {
+                if ((line.contains("Device") && line.contains("IP Address")) || (line.contains("------")) || (line.contains("Net to Media Table"))) {
                     continue;
                 }
                 line = line.trim();
-                if (line.isEmpty()) {
+                if (line.length() == 0) {
                     continue;
                 }
 
@@ -239,27 +237,26 @@ public class NodeExporter {
 
             boolean success = true;
             // Output node_boot_time_seconds metric
-            if (bootTime != "") {
+            if (!bootTime.equals("")) {
                 sb.append("# HELP node_boot_time_seconds Node boot time, in seconds since Unix epoch.\n");
                 sb.append("# TYPE node_boot_time_seconds gauge\n");
                 sb.append("node_boot_time_seconds ").append(bootTime).append("\n");
             } else {
-                sb.append("# Error retrieving node_boot_time_seconds metric");
+                sb.append("# Error retrieving node_boot_time_seconds metric\n");
                 success = false;
             }
 
             // Output node_procs_running metric
-            if (nproc != "") {
+            if (!nproc.equals("")) {
                 sb.append("# HELP node_procs_running Number of processes in runnable state.\n");
                 sb.append("# TYPE node_procs_running gauge\n");
                 sb.append("node_procs_running ").append(nproc).append("\n");
             } else {
-                sb.append("# Error retrieving node_procs_running metric");
+                sb.append("# Error retrieving node_procs_running metric\n");
                 success = false;
             }
             return success;
         } catch (IOException e) {
-            // TODO exception handling
             sb.append("# Error reading system_misc metrics: ").append(e.getMessage()).append("\n");
             return false;
         }
@@ -284,8 +281,7 @@ public class NodeExporter {
             }
             reader.close();
 
-            if ((one == "") || (five == "") || (fifteen == "")) {
-                // TODO exception handling
+            if (one.equals("") || five.equals("") || fifteen.equals("")) {
                 sb.append("# Error parsing uptime metrics: ").append(line).append("\n");
                 return false;
             } else {
