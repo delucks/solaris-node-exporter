@@ -18,8 +18,11 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
@@ -27,78 +30,113 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
-
 public class NodeExporter {
     private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
 
     public static void main(String[] args) throws Exception {
-        HttpServer server = HttpServer.create(new InetSocketAddress(9100), 0);
-        server.createContext("/metrics", new MetricsExporter());
-        server.setExecutor(null);
-        server.start();
+        ServerSocket serverSocket = new ServerSocket(9100);
         System.out.println("NodeExporter started on port 9100");
+
+        while (true) {
+            Socket clientSocket = serverSocket.accept();
+            try {
+                handle(clientSocket);
+            } catch (IOException e) {
+                System.err.println("Error handling client: " + e.getMessage());
+            }
+        }
     }
 
-    static class MetricsExporter implements HttpHandler {
-        @Override
-        public void handle(HttpExchange t) throws IOException {
-            StringBuilder response = new StringBuilder();
-            // establish collector metrics
-            long start;
-            boolean succeeded;
-            StringBuilder timing = new StringBuilder();
-            StringBuilder success = new StringBuilder();
+    public static void handle(Socket socket) throws IOException {
+        // Parse the HTTP request
+        String requestLine, line, method, path, httpVersion, referer, userAgent, client;
+        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+        // NOTE: auto-flushing is enabled-- we should check to make sure this isn't causing weird behavior once running under load
+        PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
 
-            // call all collectors
-            // loadavg
-            start = System.nanoTime();
-            succeeded = scrapeLoadAvg(response);
-            collectStats("loadavg", timing, success, start, System.nanoTime(), succeeded);
-
-            // boottime & procs_running
-            start = System.nanoTime();
-            succeeded = scrapeSystemMisc(response);
-            collectStats("os", timing, success, start, System.nanoTime(), succeeded);
-
-            // arp counters
-            start = System.nanoTime();
-            succeeded = scrapeArp(response);
-            collectStats("arp", timing, success, start, System.nanoTime(), succeeded);
-
-            // interrupts, context switches, forks
-            start = System.nanoTime();
-            succeeded = scrapeVmstatTotals(response);
-            collectStats("vmstat", timing, success, start, System.nanoTime(), succeeded);
-
-            // emit collector duration & success metrics
-            response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
-            response.append("# TYPE node_scrape_collector_duration_seconds gauge\n");
-            response.append(timing.toString());
-            response.append("# HELP node_scrape_collector_success node_exporter: Whether a collector succeeded.\n");
-            response.append("# TYPE node_scrape_collector_success gauge\n");
-            response.append(success.toString());
-
-            int statusCode = 200;
-            t.sendResponseHeaders(statusCode, response.length());
-            OutputStream os = t.getResponseBody();
-            os.write(response.toString().getBytes());
-            os.close();
-
-            // Emit web server log in Apache combined log format
-            String client, referer, userAgent;
-            InetAddress remoteAddr = t.getRemoteAddress().getAddress();
-            client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
-            referer = t.getRequestHeaders().getFirst("Referer");
-            referer = referer != null ? referer : "-";
-            userAgent = t.getRequestHeaders().getFirst("User-Agent");
-            userAgent = userAgent != null ? userAgent : "-";
-            String timestamp = apache.format(new Date());
-            String requestLine = t.getRequestMethod() + " " + t.getRequestURI() + " " + t.getProtocol();
-            System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, statusCode, response.length(), referer, userAgent);
+        // First line of the request should be the method, path, and protocol
+        requestLine = in.readLine();
+        if (requestLine == null) {
+            return;
         }
+        String[] parts = requestLine.split("\\s+");
+        if (parts.length < 3) {
+            return;
+        }
+        method = parts[0];
+        path = parts[1];
+        httpVersion = parts[2];
+
+        // This server only supports GET /metrics; give a 404 otherwise
+        if (!method.equals("GET") || !path.equals("/metrics")) {
+            out.print("HTTP/1.1 404 NOT FOUND\r\n");
+            out.print("Content-Type: text/plain; charset=utf-8\r\n");
+            out.print("Content-Length: 2\r\n");
+            out.print("\r\n");
+            // TODO something in here is broken
+            System.out.println("404!!");
+            return;
+        }
+
+        // Read the headers we need if we're on the right path and method
+        referer = "-";
+        userAgent = "-";
+        while ((line = in.readLine()) != null && line.length() > 0) {
+            if (line.toLowerCase().startsWith("referer:")) {
+                referer = line.substring(8).trim();
+            } else if (line.toLowerCase().startsWith("user-agent:")) {
+                userAgent = line.substring(11).trim();
+            }
+        }
+
+        StringBuilder response = new StringBuilder();
+        // establish collector metrics
+        long start;
+        boolean succeeded;
+        StringBuilder timing = new StringBuilder();
+        StringBuilder success = new StringBuilder();
+
+        // call all collectors
+        // loadavg
+        start = System.nanoTime();
+        succeeded = scrapeLoadAvg(response);
+        collectStats("loadavg", timing, success, start, System.nanoTime(), succeeded);
+
+        // boottime & procs_running
+        start = System.nanoTime();
+        succeeded = scrapeSystemMisc(response);
+        collectStats("os", timing, success, start, System.nanoTime(), succeeded);
+
+        // arp counters
+        start = System.nanoTime();
+        succeeded = scrapeArp(response);
+        collectStats("arp", timing, success, start, System.nanoTime(), succeeded);
+
+        // interrupts, context switches, forks
+        start = System.nanoTime();
+        succeeded = scrapeVmstatTotals(response);
+        collectStats("vmstat", timing, success, start, System.nanoTime(), succeeded);
+
+        // emit collector duration & success metrics
+        response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
+        response.append("# TYPE node_scrape_collector_duration_seconds gauge\n");
+        response.append(timing.toString());
+        response.append("# HELP node_scrape_collector_success node_exporter: Whether a collector succeeded.\n");
+        response.append("# TYPE node_scrape_collector_success gauge\n");
+        response.append(success.toString());
+
+        out.print("HTTP/1.1 200 OK\r\n");
+        out.print("Content-Type: text/plain; charset=utf-8\r\n");
+        out.print("Content-Length: " + response.length() + "\r\n");
+        out.print("\r\n");
+        out.print(response.toString());
+        out.close();
+
+        // Emit web server log in Apache combined log format
+        InetAddress remoteAddr = socket.getInetAddress();
+        client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
+        String timestamp = apache.format(new Date());
+        System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, 200, response.length(), referer, userAgent);
     }
 
     private static void collectStats(String collectorName, StringBuilder timing, StringBuilder success, long start, long end, boolean succeeded) {
