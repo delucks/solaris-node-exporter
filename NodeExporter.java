@@ -33,16 +33,30 @@ import java.util.regex.Matcher;
 public class NodeExporter {
     private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
 
-    public static void main(String[] args) throws Exception {
-        ServerSocket serverSocket = new ServerSocket(9100);
-        System.out.println("NodeExporter started on port 9100");
-
+    public static void main(String[] args) {
+        ServerSocket serverSocket = null;
+        Socket clientSocket = null;
+        try {
+            serverSocket = new ServerSocket(9100);
+        } catch (IOException e) {
+            System.err.println("Error creating socket: " + e.getMessage());
+            System.exit(1);
+        }
+        System.err.println("NodeExporter started on port 9100");
         while (true) {
-            Socket clientSocket = serverSocket.accept();
             try {
+                clientSocket = serverSocket.accept();
                 handle(clientSocket);
             } catch (IOException e) {
                 System.err.println("Error handling client: " + e.getMessage());
+            } finally {
+                if (clientSocket != null) {
+                    try {
+                        clientSocket.close();
+                    } catch (IOException e) {
+                        System.err.println("Error closing socket: " + e.getMessage());
+                    }
+                }
             }
         }
     }
@@ -88,6 +102,23 @@ public class NodeExporter {
             }
         }
 
+        StringBuilder response = runScrapers();
+
+        out.print("HTTP/1.1 200 OK\r\n");
+        out.print("Content-Type: text/plain; charset=utf-8\r\n");
+        out.print("Content-Length: " + response.length() + "\r\n");
+        out.print("\r\n");
+        out.print(response.toString());
+        out.close();
+
+        // Emit web server log in Apache combined log format
+        InetAddress remoteAddr = socket.getInetAddress();
+        client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
+        String timestamp = apache.format(new Date());
+        System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, 200, response.length(), referer, userAgent);
+    }
+
+    public static StringBuilder runScrapers() {
         StringBuilder response = new StringBuilder();
         // establish collector metrics
         long start;
@@ -123,19 +154,7 @@ public class NodeExporter {
         response.append("# HELP node_scrape_collector_success node_exporter: Whether a collector succeeded.\n");
         response.append("# TYPE node_scrape_collector_success gauge\n");
         response.append(success.toString());
-
-        out.print("HTTP/1.1 200 OK\r\n");
-        out.print("Content-Type: text/plain; charset=utf-8\r\n");
-        out.print("Content-Length: " + response.length() + "\r\n");
-        out.print("\r\n");
-        out.print(response.toString());
-        out.close();
-
-        // Emit web server log in Apache combined log format
-        InetAddress remoteAddr = socket.getInetAddress();
-        client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
-        String timestamp = apache.format(new Date());
-        System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, 200, response.length(), referer, userAgent);
+        return response;
     }
 
     private static void collectStats(String collectorName, StringBuilder timing, StringBuilder success, long start, long end, boolean succeeded) {
@@ -194,8 +213,7 @@ public class NodeExporter {
             sb.append("node_forks_total ").append(forks).append("\n");
             return true;
         } catch (IOException e) {
-            // TODO exception handling
-            sb.append("# Error reading static vmstat metrics: ").append(e.getMessage()).append("\n");
+            System.err.println("Error reading static vmstat metrics: " + e.getMessage());
             return false;
         }
     }
@@ -239,8 +257,7 @@ public class NodeExporter {
                 return true;
             }
         } catch (IOException e) {
-            // TODO exception handling
-            sb.append("# Error reading arp metrics: ").append(e.getMessage()).append("\n");
+            System.err.println("Error reading arp metrics: " + e.getMessage());
             return false;
         }
     }
@@ -294,7 +311,7 @@ public class NodeExporter {
             }
             return success;
         } catch (IOException e) {
-            sb.append("# Error reading system_misc metrics: ").append(e.getMessage()).append("\n");
+            System.err.println("Error reading system_misc metrics: " + e.getMessage());
             return false;
         }
     }
@@ -335,8 +352,7 @@ public class NodeExporter {
             }
             return true;
         } catch (IOException e) {
-            // TODO exception handling
-            sb.append("# Error reading uptime metrics: ").append(e.getMessage()).append("\n");
+            System.err.println("Error reading uptime metrics: " + e.getMessage());
             return false;
         }
     }
