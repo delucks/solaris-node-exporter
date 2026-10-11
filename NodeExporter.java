@@ -1,4 +1,6 @@
 /* NodeExporter - a prometheus node_exporter compatible service for Solaris 10
+ * Targets Java 5; any later releases should run fine
+ * Version 0.1.0: Initial release
  * Copyright (C) 2026, Jamie Luck (delucks)
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,17 +34,52 @@ import java.util.regex.Matcher;
 
 public class NodeExporter {
     private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
+    private static final String version = "0.1.0";
 
     public static void main(String[] args) {
+        int port = 9100;
+        // Parse command-line args
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("-h") || args[i].equals("--help")) {
+                System.out.println("NodeExporter: a prometheus node-exporter compatible service for Solaris 10\n");
+                System.out.println("Version " + version);
+                System.out.println("Usage Summary");
+                System.out.println("  -h/--help:           Show this help text");
+                System.out.println("  -v/--version:        Display this build's version of NodeExporter");
+                System.out.println("  -p/--port <PORTNUM>: Set the port number to PORTNUM");
+                return;
+            } else if (args[i].equals("-v") || args[i].equals("--version")) {
+                System.out.println(version);
+                return;
+            } else if (args[i].equals("-p") || args[i].equals("--port")) {
+                if (i + 1 < args.length) {
+                    try {
+                        port = Integer.parseInt(args[++i]);
+                        if (port <= 0) {
+                            System.err.println("Port must be greater than 0!");
+                            System.exit(1);
+                        }
+                    } catch (NumberFormatException e) {
+                        System.err.println("Cannot parse port number: " + args[i]);
+                        System.exit(1);
+                    }
+                } else {
+                    System.err.println("Missing port number for -p/--port argument");
+                    System.exit(1);
+                }
+            }
+        }
+        // Set up the server
         ServerSocket serverSocket = null;
         Socket clientSocket = null;
         try {
-            serverSocket = new ServerSocket(9100);
+            serverSocket = new ServerSocket(port);
         } catch (IOException e) {
             System.err.println("Error creating socket: " + e.getMessage());
             System.exit(1);
         }
-        System.err.println("NodeExporter started on port 9100");
+        System.err.println("NodeExporter started on port " + port);
+        // Accept connections (single-threaded)
         while (true) {
             try {
                 clientSocket = serverSocket.accept();
