@@ -62,12 +62,11 @@ public class NodeExporter {
     }
 
     public static void handle(Socket socket) throws IOException {
-        // Parse the HTTP request
+        // Parse the HTTP request headers
         String requestLine, line, method, path, referer, userAgent, client;
         BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         // NOTE: auto-flushing is enabled-- we should check to make sure this isn't causing weird behavior once running under load
         PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-
         // First line of the request should be the method, path, and protocol
         requestLine = in.readLine();
         if (requestLine == null) {
@@ -79,18 +78,6 @@ public class NodeExporter {
         }
         method = parts[0];
         path = parts[1];
-
-        // This server only supports GET /metrics; give a 404 otherwise
-        if (!method.equals("GET") || !path.equals("/metrics")) {
-            out.print("HTTP/1.1 404 NOT FOUND\r\n");
-            out.print("Content-Type: text/plain; charset=utf-8\r\n");
-            out.print("Content-Length: 2\r\n");
-            out.print("\r\n");
-            // TODO something in here is broken
-            System.out.println("404!!");
-            return;
-        }
-
         // Read the headers we need if we're on the right path and method
         referer = "-";
         userAgent = "-";
@@ -101,21 +88,44 @@ public class NodeExporter {
                 userAgent = line.substring(11).trim();
             }
         }
-
-        StringBuilder response = runScrapers();
-
-        out.print("HTTP/1.1 200 OK\r\n");
-        out.print("Content-Type: text/plain; charset=utf-8\r\n");
-        out.print("Content-Length: " + response.length() + "\r\n");
-        out.print("\r\n");
-        out.print(response.toString());
-        out.close();
-
-        // Emit web server log in Apache combined log format
+        // We don't technically need this for the headers but it's used in the logging statements soooo...
         InetAddress remoteAddr = socket.getInetAddress();
         client = remoteAddr != null ? remoteAddr.getHostAddress() : "-";
+
+        StringBuilder response = null;
+        // This server only supports GET /metrics; give a 404 otherwise
+        if (!method.equals("GET") || !path.equals("/metrics")) {
+            response = new StringBuilder("<html>\r\n<head><title>Resource Not Found</title></head>\r\n<body><p>Not Found. Try <a href=\"/metrics\">/metrics</a></p></body>\r\n</html>\r\n");
+            httpRespond(404, out, response);
+            apacheLog(client, requestLine, 404, response.length(), referer, userAgent);
+            return;
+        }
+
+        // Run all system collectors and give a 200 response with the body of the scrapers which functioned
+        // A partial response is still a 200 response, but with scraper failure status noted in the response body
+        response = runScrapers();
+        httpRespond(200, out, response);
+
+        apacheLog(client, requestLine, 200, response.length(), referer, userAgent);
+    }
+
+    public static void apacheLog(String client, String requestLine, int statusCode, int length, String referer, String userAgent) {
+        // Emit web server log in Apache combined log format to standard output
         String timestamp = apache.format(new Date());
-        System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, 200, response.length(), referer, userAgent);
+        System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, statusCode, length, referer, userAgent);
+    }
+
+    public static void httpRespond(int status, PrintWriter out, StringBuilder body) {
+        if (status == 200) {
+            out.print("HTTP/1.1 200 OK\r\n");
+        } else if (status == 404) {
+            out.print("HTTP/1.1 404 NOT FOUND\r\n");
+        }
+        out.print("Content-Type: text/plain; charset=utf-8\r\n");
+        out.print("Content-Length: " + body.length() + "\r\n");
+        out.print("\r\n");
+        out.print(body.toString());
+        out.close();
     }
 
     public static StringBuilder runScrapers() {
