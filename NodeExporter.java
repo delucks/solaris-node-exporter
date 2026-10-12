@@ -3,6 +3,13 @@
  * Version 0.1.0: Initial release
  * Copyright (C) 2026, Jamie Luck (delucks)
  *
+ * This requires the following command-line programs to be in PATH:
+ * arp      (typically /usr/sbin/arp)
+ * kstat    (typically /usr/bin/kstat)
+ * pagesize (typically /usr/bin/pagesize)
+ * uptime   (typically /usr/bin/uptime)
+ * vmstat   (typically /usr/bin/vmstat)
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -132,9 +139,15 @@ class KstatEntry {
 public class NodeExporter {
     private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
     private static final String version = "0.1.0";
+    private static int pagesize;
 
     public static void main(String[] args) {
         int port = 9100;
+        pagesize = getPageSize();
+        if (pagesize < 0) {
+            System.err.println("Could not determine page size, exiting");
+            System.exit(1);
+        }
         // Parse command-line args
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-h") || args[i].equals("--help")) {
@@ -291,6 +304,11 @@ public class NodeExporter {
         succeeded = scrapeVmstatTotals(response);
         collectStats("vmstat", timing, success, start, System.nanoTime(), succeeded);
 
+        // swap
+        start = System.nanoTime();
+        succeeded = scrapeSwap(response);
+        collectStats("swap", timing, success, start, System.nanoTime(), succeeded);
+
         // emit collector duration & success metrics
         response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
         response.append("# TYPE node_scrape_collector_duration_seconds gauge\n");
@@ -305,6 +323,29 @@ public class NodeExporter {
         double durationSeconds = (end - start) / 1000000000.0;
         timing.append("node_scrape_collector_duration_seconds{collector=\"").append(collectorName).append("\"} ").append(durationSeconds).append("\n");
         success.append("node_scrape_collector_success{collector=\"").append(collectorName).append("\"} ").append(succeeded ? "1" : "0").append("\n");
+    }
+
+    private static int getPageSize() {
+        String line;
+        int pageSize = -1;
+        try {
+            Process p = new ProcessBuilder("pagesize").start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            line = reader.readLine();
+            if (line != null) {
+                try {
+                    pageSize = Integer.parseInt(line.trim());
+                } catch (NumberFormatException e) {
+                    System.err.println(e.getMessage());
+                    return -1;
+                }
+            }
+            reader.close();
+        } catch (IOException e) {
+            System.err.println(e.getMessage());
+            return -1;
+        }
+        return pageSize;
     }
 
     private static boolean scrapeVmstatTotals(StringBuilder sb) {
@@ -402,6 +443,71 @@ public class NodeExporter {
             }
         } catch (IOException e) {
             System.err.println("Error reading arp metrics: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static boolean scrapeSwap(StringBuilder sb) {
+        try {
+            KstatEntry kstats;
+            String fullOutput, swap_alloc, swap_avail, swap_free;
+            long alloc, avail, free;
+
+            Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "vminfo").start();
+            ByteArrayOutputStream result = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
+                result.write(buffer, 0, length);
+            }
+            fullOutput = result.toString("UTF-8");
+
+            try {
+                kstats = new KstatEntry(fullOutput);
+            } catch (KstatException e) {
+                System.err.println(e.getMessage());
+                return false;
+            }
+            swap_alloc = kstats.getOrDefault("swap_alloc", "");
+            swap_avail = kstats.getOrDefault("swap_avail", "");
+            swap_free = kstats.getOrDefault("swap_free", "");
+            try {
+                alloc = Long.parseLong(swap_alloc);
+                avail = Long.parseLong(swap_avail);
+                free = Long.parseLong(swap_free);
+            } catch (NumberFormatException e) {
+                sb.append("# Could not convert swap pages to integers" + e.getMessage() + "\n");
+                return false;
+            }
+
+            boolean success = true;
+            // Output each metric if available
+            if (alloc >= 0) {
+                sb.append("# HELP node_memory_SwapCached_bytes Memory reported by the kernel as allocated swap\n");
+                sb.append("# TYPE node_memory_SwapCached_bytes gauge\n");
+                sb.append("node_memory_SwapCached_bytes ").append(alloc * pagesize).append("\n");
+            } else {
+                sb.append("# Error retrieving node_memory_SwapCached_bytes metric\n");
+                success = false;
+            }
+            if (free >= 0) {
+                sb.append("# HELP node_memory_SwapFree_bytes Memory reported by the kernel as free for swap\n");
+                sb.append("# TYPE node_memory_SwapFree_bytes gauge\n");
+                sb.append("node_memory_SwapFree_bytes ").append(free * pagesize).append("\n");
+            } else {
+                sb.append("# Error retrieving node_memory_SwapFree_bytes metric\n");
+                success = false;
+            }
+            if (avail >= 0) {
+                sb.append("# HELP node_memory_SwapTotal_bytes Memory reported by the kernel as available swap\n");
+                sb.append("# TYPE node_memory_SwapTotal_bytes gauge\n");
+                sb.append("node_memory_SwapTotal_bytes ").append(avail * pagesize).append("\n");
+            } else {
+                sb.append("# Error retrieving node_memory_SwapTotal_bytes metric\n");
+                success = false;
+            }
+            return success;
+        } catch (IOException e) {
+            System.err.println("Error reading swap metrics: " + e.getMessage());
             return false;
         }
     }
