@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -32,6 +33,102 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
+/*
+ * KstatException is an exception type used to return parsing errors from the KstatEntry constructor
+ */
+class KstatException extends Exception {
+    public KstatException(String m) {
+        super(m);
+    }
+}
+
+/*
+ * KstatEntry represents a single entry of kernel-level statistics returned by the
+ * kstat facility in Solaris. This class is constructed with the output of the `kstat`
+ * command-line utility for one module, instance, name, and class combination.
+ */
+class KstatEntry {
+    private String module, instance, name, kstatClass;
+    private HashMap<String, String> values;
+
+    public KstatEntry(String kstatStanza) throws KstatException {
+        String[] lines = kstatStanza.trim().split("\n");
+        // If there's not at least one k/v pair after the header lines it's not going to be useful to parse
+        if (lines.length < 3) {
+            throw new KstatException("The kstat stanza provided doesn't have enough content");
+        }
+        String module, instance, name, kstatClass;
+        module = instance = name = kstatClass = "";
+
+        // Parse module and instance from the first line
+        String[] firstLineSections = lines[0].trim().split("\\s+");
+        // module:, instance:, and their respective values need to be present to be valid
+        if (firstLineSections.length < 4) {
+            throw new KstatException("The first line did not have enough fields: " + lines[0]);
+        }
+        if (firstLineSections[0].equals("module:")) {
+            module = firstLineSections[1];
+        }
+        if (firstLineSections[2].equals("instance:")) {
+            instance = firstLineSections[3];
+        }
+        if (module.equals("") || instance.equals("")) {
+            throw new KstatException("The first line doesn't contain both module and instance metadata: " + lines[0]);
+        }
+
+        // Parse name and class from the second line
+        String[] secondLineSections = lines[1].trim().split("\\s+");
+        if (secondLineSections.length < 4) {
+            throw new KstatException("The second line did not have enough fields: " + lines[1]);
+        }
+        if (secondLineSections[0].equals("name:")) {
+            name = secondLineSections[1];
+        }
+        if (secondLineSections[2].equals("class:")) {
+            kstatClass = secondLineSections[3];
+        }
+        if (name.equals("") || kstatClass.equals("")) {
+            throw new KstatException("The second line doesn't contain both name and class metadata: " + lines[1]);
+        }
+
+        // Parse key-value pairs from remaining lines
+        HashMap<String, String> kstatData = new HashMap<String, String>();
+        for (int i = 2; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.length() == 0) {
+                continue;
+            }
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length < 2) {
+                continue;
+            }
+            kstatData.put(parts[0], parts[1]);
+        }
+
+        this.module = module;
+        this.instance = instance;
+        this.name = name;
+        this.kstatClass = kstatClass;
+        this.values = kstatData;
+    }
+
+    public String getOrDefault(String key, String fallback) {
+        if (this.values.containsKey(key)) {
+            return this.values.get(key);
+        } else {
+            return fallback;
+        }
+    }
+
+    public String toString() {
+        return String.format("module: %s name: %s instance: %s class: %s values: %s", module, name, instance, kstatClass, values);
+    }
+}
+
+/*
+ * NodeExporter is the main server class of the NodeExporter service, responsible for scraping system
+ * information and returning it over HTTP
+ */
 public class NodeExporter {
     private static final SimpleDateFormat apache = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z");
     private static final String version = "0.1.0";
@@ -316,25 +413,25 @@ public class NodeExporter {
         // node_procs_running isn't entirely accurate; it's the total number of processes
         // We can't tell at this stage how many of these are node_procs_blocked
         try {
+            String fullOutput, bootTime, nproc;
+            KstatEntry kstats;
+
             Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "system_misc").start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line, bootTime, nproc;
-            bootTime = nproc = "";
-
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.trim().split("\\s+", 2);
-                if (parts.length >= 2) {
-                    String metricName = parts[0];
-                    String metricValue = parts[1];
-
-                    if (metricName.equals("boot_time")) {
-                        bootTime = metricValue;
-                    } else if (metricName.equals("nproc")) {
-                        nproc = metricValue;
-                    }
-                }
+            ByteArrayOutputStream result = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
+                result.write(buffer, 0, length);
             }
-            reader.close();
+            fullOutput = result.toString("UTF-8");
+
+            try {
+                kstats = new KstatEntry(fullOutput);
+            } catch (KstatException e) {
+                System.err.println(e.getMessage());
+                return false;
+            }
+            bootTime = kstats.getOrDefault("boot_time", "");
+            nproc = kstats.getOrDefault("nproc", "");
 
             boolean success = true;
             // Output node_boot_time_seconds metric
