@@ -143,7 +143,7 @@ public class NodeExporter {
 
     public static void main(String[] args) {
         int port = 9100;
-        pagesize = getPageSize();
+        pagesize = getSystemPageSize();
         if (pagesize < 0) {
             System.err.println("Could not determine page size, exiting");
             System.exit(1);
@@ -309,10 +309,15 @@ public class NodeExporter {
         succeeded = scrapeSwap(response);
         collectStats("swap", timing, success, start, System.nanoTime(), succeeded);
 
-        // cpu
+        // cpu states
         start = System.nanoTime();
         succeeded = scrapeCPUStates(response);
         collectStats("cpu", timing, success, start, System.nanoTime(), succeeded);
+
+        // cpu frequency
+        start = System.nanoTime();
+        succeeded = scrapeCPUFreq(response);
+        collectStats("cpufreq", timing, success, start, System.nanoTime(), succeeded);
 
         // emit collector duration & success metrics
         response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
@@ -330,7 +335,7 @@ public class NodeExporter {
         success.append("node_scrape_collector_success{collector=\"").append(collectorName).append("\"} ").append(succeeded ? "1" : "0").append("\n");
     }
 
-    private static int getPageSize() {
+    private static int getSystemPageSize() {
         String line;
         int pageSize = -1;
         try {
@@ -448,6 +453,81 @@ public class NodeExporter {
             }
         } catch (IOException e) {
             System.err.println("Error reading arp metrics: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static boolean scrapeCPUFreq(StringBuilder sb) {
+        try {
+            String fullOutput;
+            String[] kstatChunks;
+            KstatEntry[] kstats;
+
+            Process p = new ProcessBuilder("kstat", "-m", "cpu_info").start();
+            ByteArrayOutputStream result = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            int length;
+            while ((length = p.getInputStream().read(buffer)) != -1) {
+                result.write(buffer, 0, length);
+            }
+            fullOutput = result.toString("UTF-8");
+            kstatChunks = fullOutput.split("\n\n");
+
+            kstats = new KstatEntry[kstatChunks.length];
+            for (int i=0; i<kstatChunks.length; i++) {
+                try {
+                    kstats[i] = new KstatEntry(kstatChunks[i]);
+                } catch (KstatException e) {
+                    System.err.println(e.getMessage());
+                    return false;
+                }
+            }
+
+            boolean success = true;
+            StringBuilder current = new StringBuilder();
+            StringBuilder max = new StringBuilder();
+            if (kstats.length > 0) {
+                current.append("# HELP node_cpu_frequency_hertz Current CPU thread frequency in hertz.\n");
+                current.append("# TYPE node_cpu_frequency_hertz gauge\n");
+                max.append("# HELP node_cpu_frequency_max_hertz Maximum CPU thread frequency in hertz.\n");
+                max.append("# TYPE node_cpu_frequency_max_hertz gauge\n");
+            } else {
+                System.err.println("No CPU info returned by kstat!");
+                return false;
+            }
+            for (int i=0; i<kstats.length; i++) {
+                String currentFreqHz, maxFreqMhz;
+                long freqHz, freqMaxHz;
+                currentFreqHz = kstats[i].getOrDefault("current_clock_Hz", "");
+                maxFreqMhz = kstats[i].getOrDefault("clock_MHz", "");
+                try {
+                    freqHz = Long.parseLong(currentFreqHz);
+                    freqMaxHz = Long.parseLong(maxFreqMhz) * 1000000;
+                } catch (NumberFormatException e) {
+                    sb.append("# Could not convert CPU ").append(i).append(" frequency values to longs: ").append(e.getMessage()).append("\n");
+                    success = false;
+                    continue;
+                }
+
+                if (freqHz > 0) {
+                    current.append("node_cpu_frequency_hertz{cpu=\"").append(i).append("\"} ").append(freqHz).append("\n");
+                } else {
+                    current.append("# Error retrieving node_cpu_frequency_hertz metric for CPU ").append(i).append("\n");
+                    success = false;
+                }
+                if (freqMaxHz > 0) {
+                    max.append("node_cpu_frequency_max_hertz{cpu=\"").append(i).append("\"} ").append(freqMaxHz).append("\n");
+                } else {
+                    max.append("# Error retrieving node_cpu_frequency_max_hertz metric for CPU ").append(i).append("\n");
+                    success = false;
+                }
+            }
+            sb.append(current.toString());
+            sb.append(max.toString());
+
+            return success;
+        } catch (IOException e) {
+            System.err.println("Error reading CPU frequency metrics: " + e.getMessage());
             return false;
         }
     }
