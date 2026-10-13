@@ -309,6 +309,11 @@ public class NodeExporter {
         succeeded = scrapeSwap(response);
         collectStats("swap", timing, success, start, System.nanoTime(), succeeded);
 
+        // cpu
+        start = System.nanoTime();
+        succeeded = scrapeCPUStates(response);
+        collectStats("cpu", timing, success, start, System.nanoTime(), succeeded);
+
         // emit collector duration & success metrics
         response.append("# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.\n");
         response.append("# TYPE node_scrape_collector_duration_seconds gauge\n");
@@ -447,6 +452,96 @@ public class NodeExporter {
         }
     }
 
+    private static boolean scrapeCPUStates(StringBuilder sb) {
+        try {
+            String fullOutput;
+            String[] kstatChunks;
+            KstatEntry[] kstats;
+
+            Process p = new ProcessBuilder("kstat", "-m", "cpu", "-n", "sys").start();
+            ByteArrayOutputStream result = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
+                result.write(buffer, 0, length);
+            }
+            fullOutput = result.toString("UTF-8");
+            kstatChunks = fullOutput.split("\n\n");
+
+            kstats = new KstatEntry[kstatChunks.length];
+            for (int i=0; i<kstatChunks.length; i++) {
+                try {
+                    kstats[i] = new KstatEntry(kstatChunks[i]);
+                } catch (KstatException e) {
+                    System.err.println(e.getMessage());
+                    return false;
+                }
+            }
+
+            boolean success = true;
+            if (kstats.length > 0) {
+                sb.append("# HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.\n");
+                sb.append("# TYPE node_cpu_seconds_total counter\n");
+            } else {
+                System.err.println("No CPUs returned by kstat!");
+                return false;
+            }
+
+            // Emit metrics specific to each CPU
+            for (int i=0; i<kstats.length; i++) {
+                String cpu_nsec_idle, cpu_nsec_kernel, cpu_nsec_user, cpu_nsec_intr;
+                long nsec_idle, nsec_kernel, nsec_user, nsec_intr;
+
+                KstatEntry cpu = kstats[i];
+                cpu_nsec_idle = cpu.getOrDefault("cpu_nsec_idle", "");
+                cpu_nsec_kernel = cpu.getOrDefault("cpu_nsec_kernel", "");
+                cpu_nsec_user = cpu.getOrDefault("cpu_nsec_user", "");
+                cpu_nsec_intr = cpu.getOrDefault("cpu_nsec_intr", "");
+
+                try {
+                    nsec_idle = Long.parseLong(cpu_nsec_idle);
+                    nsec_kernel = Long.parseLong(cpu_nsec_kernel);
+                    nsec_user = Long.parseLong(cpu_nsec_user);
+                    nsec_intr = Long.parseLong(cpu_nsec_intr);
+                } catch (NumberFormatException e) {
+                    sb.append("# Could not convert CPU ").append(i).append(" nsec totals to longs: ").append(e.getMessage()).append("\n");
+                    success = false;
+                    continue;
+                }
+                if (nsec_idle >= 0) {
+                    sb.append("node_cpu_seconds_total{cpu=\"").append(i).append("\",mode=\"idle\"} ").append(nsec_idle/1e9).append("\n");
+                } else {
+                    sb.append("# Error retrieving node_cpu_seconds_total{mode=idle} metric for CPU ").append(i).append("\n");
+                    success = false;
+                }
+                // Linux would call this mode "system"; this is an incompatibility
+                if (nsec_kernel >= 0) {
+                    sb.append("node_cpu_seconds_total{cpu=\"").append(i).append("\",mode=\"kernel\"} ").append(nsec_kernel/1e9).append("\n");
+                } else {
+                    sb.append("# Error retrieving node_cpu_seconds_total metric{mode=kernel} for CPU ").append(i).append("\n");
+                    success = false;
+                }
+                if (nsec_user >= 0) {
+                    sb.append("node_cpu_seconds_total{cpu=\"").append(i).append("\",mode=\"user\"} ").append(nsec_user/1e9).append("\n");
+                } else {
+                    sb.append("# Error retrieving node_cpu_seconds_total metric{mode=user} for CPU ").append(i).append("\n");
+                    success = false;
+                }
+                // Linux would (roughly) call this mode "irq"; this is an incompatibility
+                if (nsec_intr >= 0) {
+                    sb.append("node_cpu_seconds_total{cpu=\"").append(i).append("\",mode=\"intr\"} ").append(nsec_intr/1e9).append("\n");
+                } else {
+                    sb.append("# Error retrieving node_cpu_seconds_total metric{mode=intr} for CPU ").append(i).append("\n");
+                    success = false;
+                }
+            }
+
+            return success;
+        } catch (IOException e) {
+            System.err.println("Error reading CPU metrics: " + e.getMessage());
+            return false;
+        }
+    }
+
     private static boolean scrapeSwap(StringBuilder sb) {
         try {
             KstatEntry kstats;
@@ -516,6 +611,9 @@ public class NodeExporter {
         // Improvements:
         // Load averages could be calculated from avenrun_1min (etc) / FSCALE
         // but FSCALE is only defined in sys/param.h and I don't want to reach for JNI yet
+        // Hardcoding is good enough for Brendan Gregg so it's good enough for me too?
+        // https://www.brendangregg.com/K9Toolkit/uptime
+        //
         // node_procs_running isn't entirely accurate; it's the total number of processes
         // We can't tell at this stage how many of these are node_procs_blocked
         try {
