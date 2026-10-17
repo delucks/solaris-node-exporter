@@ -256,12 +256,17 @@ public class NodeExporter {
         apacheLog(client, requestLine, 200, response.length(), referer, userAgent);
     }
 
+    /*
+     * apacheLog emits a web server log in Apache combined log format to standard output.
+     */
     public static void apacheLog(String client, String requestLine, int statusCode, int length, String referer, String userAgent) {
-        // Emit web server log in Apache combined log format to standard output
         String timestamp = apache.format(new Date());
         System.out.printf("%s - - [%s] \"%s\" %d %d \"%s\" \"%s\"%n", client, timestamp, requestLine, statusCode, length, referer, userAgent);
     }
 
+    /*
+     * httpRespond writes the headers of the HTTP response and string body to a PrintWriter.
+     */
     public static void httpRespond(int status, PrintWriter out, StringBuilder body) {
         if (status == 200) {
             out.print("HTTP/1.1 200 OK\r\n");
@@ -329,6 +334,9 @@ public class NodeExporter {
         return response;
     }
 
+    /*
+     * collectStats is a helper to emit the node_scrape_collector_duration_seconds and node_scrape_collector_success metrics for each scraper.
+     */
     private static void collectStats(String collectorName, StringBuilder timing, StringBuilder success, long start, long end, boolean succeeded) {
         double durationSeconds = (end - start) / 1000000000.0;
         timing.append("node_scrape_collector_duration_seconds{collector=\"").append(collectorName).append("\"} ").append(durationSeconds).append("\n");
@@ -350,6 +358,9 @@ public class NodeExporter {
         return result.toString("UTF-8");
     }
 
+    /*
+     * getSystemPageSize reads the host system's virtual memory page size for use in later calculations.
+     */
     private static int getSystemPageSize() {
         String line;
         int pageSize = -1;
