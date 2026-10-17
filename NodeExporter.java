@@ -335,6 +335,21 @@ public class NodeExporter {
         success.append("node_scrape_collector_success{collector=\"").append(collectorName).append("\"} ").append(succeeded ? "1" : "0").append("\n");
     }
 
+    /*
+     * getProcessOutput is a helper to retrieve the entire standard output of a command as a string.
+     * This is mostly useful for the methods which scrape kstat output.
+     */
+    private static String getProcessOutput(ProcessBuilder pb) throws IOException {
+        Process p = pb.start();
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int length;
+        while ((length = p.getInputStream().read(buffer)) != -1) {
+            result.write(buffer, 0, length);
+        }
+        return result.toString("UTF-8");
+    }
+
     private static int getSystemPageSize() {
         String line;
         int pageSize = -1;
@@ -463,14 +478,7 @@ public class NodeExporter {
             String[] kstatChunks;
             KstatEntry[] kstats;
 
-            Process p = new ProcessBuilder("kstat", "-m", "cpu_info").start();
-            ByteArrayOutputStream result = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            int length;
-            while ((length = p.getInputStream().read(buffer)) != -1) {
-                result.write(buffer, 0, length);
-            }
-            fullOutput = result.toString("UTF-8");
+            fullOutput = getProcessOutput(new ProcessBuilder("kstat", "-m", "cpu_info"));
             kstatChunks = fullOutput.split("\n\n");
 
             kstats = new KstatEntry[kstatChunks.length];
@@ -538,13 +546,7 @@ public class NodeExporter {
             String[] kstatChunks;
             KstatEntry[] kstats;
 
-            Process p = new ProcessBuilder("kstat", "-m", "cpu", "-n", "sys").start();
-            ByteArrayOutputStream result = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
-                result.write(buffer, 0, length);
-            }
-            fullOutput = result.toString("UTF-8");
+            fullOutput = getProcessOutput(new ProcessBuilder("kstat", "-m", "cpu", "-n", "sys"));
             kstatChunks = fullOutput.split("\n\n");
 
             kstats = new KstatEntry[kstatChunks.length];
@@ -628,13 +630,7 @@ public class NodeExporter {
             String fullOutput, swap_alloc, swap_avail, swap_free;
             long alloc, avail, free;
 
-            Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "vminfo").start();
-            ByteArrayOutputStream result = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
-                result.write(buffer, 0, length);
-            }
-            fullOutput = result.toString("UTF-8");
+            fullOutput = getProcessOutput(new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "vminfo"));
 
             try {
                 kstats = new KstatEntry(fullOutput);
@@ -700,13 +696,7 @@ public class NodeExporter {
             String fullOutput, bootTime, nproc;
             KstatEntry kstats;
 
-            Process p = new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "system_misc").start();
-            ByteArrayOutputStream result = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            for (int length; (length = p.getInputStream().read(buffer)) != -1; ) {
-                result.write(buffer, 0, length);
-            }
-            fullOutput = result.toString("UTF-8");
+            fullOutput = getProcessOutput(new ProcessBuilder("kstat", "-m", "unix", "-i", "0", "-n", "system_misc"));
 
             try {
                 kstats = new KstatEntry(fullOutput);
